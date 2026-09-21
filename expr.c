@@ -5,6 +5,7 @@
 #include "data.h"
 #include "decl.h"
 
+
 // Convert a scanner token into an AST binary operation.
 static ASTKind token_to_ast(TokenKind kind)
 {
@@ -27,15 +28,51 @@ static ASTKind token_to_ast(TokenKind kind)
             "syntax error on line %d: expected operator\n",
             source_line
         );
+
         exit(EXIT_FAILURE);
     }
 }
 
-// Parse the most basic expression currently supported:
-// one integer literal.
+
+// Return the precedence of an operator.
 //
-// This function also consumes the integer token and leaves
-// current_token pointing at the next token.
+// Higher number = higher precedence.
+//
+// + -  -> 10
+// * /  -> 20
+static int token_precedence(TokenKind kind)
+{
+    switch (kind) {
+    case TOK_PLUS:
+    case TOK_MINUS:
+        return 10;
+
+    case TOK_STAR:
+    case TOK_SLASH:
+        return 20;
+
+    case TOK_EOF:
+        return 0;
+
+    default:
+        fprintf(
+            stderr,
+            "syntax error on line %d: invalid operator\n",
+            source_line
+        );
+
+        exit(EXIT_FAILURE);
+    }
+}
+
+
+// Parse an integer literal.
+//
+// Current grammar:
+//
+// primary:
+//     TOK_INT
+//
 static ASTNode *primary(void)
 {
     ASTNode *node;
@@ -46,52 +83,95 @@ static ASTNode *primary(void)
             "syntax error on line %d: expected integer\n",
             source_line
         );
+
         exit(EXIT_FAILURE);
     }
 
+    // Build an AST leaf for the integer.
     node = make_ast_leaf(
         AST_INT,
         current_token.int_value
     );
 
-    // Consume the integer and fetch one-token lookahead.
+    // Consume the integer token.
     scan_token(&current_token);
 
     return node;
 }
 
-// Naive recursive binary-expression parser.
+
+// Parse a binary expression while respecting operator precedence.
 //
-// Important: Part 2 intentionally gives every operator the same
-// precedence and makes expressions right-associative.
-// Part 3 will fix operator precedence.
-ASTNode *parse_expression(void)
+// previous_precedence:
+//     precedence of the operator from the previous recursion level.
+//
+// Initial call:
+//     parse_expression(0)
+//
+// Example:
+//
+//     2 + 3 * 5
+//
+//     + precedence = 10
+//     * precedence = 20
+//
+// Because 20 > 10, 3 * 5 is grouped first.
+//
+ASTNode *parse_expression(int previous_precedence)
 {
     ASTNode *left;
     ASTNode *right;
-    ASTKind op;
 
-    // expression begins with an integer in the current grammar.
+    TokenKind operator_token;
+    int precedence;
+
+    // Parse the left operand.
     left = primary();
 
-    // Base case of the recursion.
-    if (current_token.kind == TOK_EOF) {
+    // Remember the operator after the left operand.
+    operator_token = current_token.kind;
+
+    // No operator: expression is finished.
+    if (operator_token == TOK_EOF) {
         return left;
     }
 
-    // Current token must be a binary arithmetic operator.
-    op = token_to_ast(current_token.kind);
+    precedence = token_precedence(operator_token);
 
-    // Consume the operator.
-    scan_token(&current_token);
+    /*
+     * Keep consuming operators while their precedence is
+     * higher than the operator from the previous recursion level.
+     */
+    while (precedence > previous_precedence) {
 
-    // Recursively parse everything on the right.
-    right = parse_expression();
+        // Consume the operator.
+        scan_token(&current_token);
 
-    return make_ast_node(
-        op,
-        left,
-        right,
-        0
-    );
+        /*
+         * Parse the right-hand side.
+         *
+         * Pass this operator's precedence downward so that
+         * higher-precedence operators bind more tightly.
+         */
+        right = parse_expression(precedence);
+
+        // Join left and right into a new AST.
+        left = make_ast_node(
+            token_to_ast(operator_token),
+            left,
+            right,
+            0
+        );
+
+        // Look at the next operator.
+        operator_token = current_token.kind;
+
+        if (operator_token == TOK_EOF) {
+            return left;
+        }
+
+        precedence = token_precedence(operator_token);
+    }
+
+    return left;
 }
